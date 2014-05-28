@@ -491,6 +491,17 @@ class Record(dict):
             field.fill(self, v)
 
     @classmethod
+    def probe(cls, io):
+        restore = io.tell()
+        try:
+            try:
+                return cls.load(io.read(cls.length))
+            except Field.error_type:
+                return None
+        finally:
+            io.seek(restore, os.SEEK_SET)
+
+    @classmethod
     def load(cls, raw):
         values = {}
         for f in cls.fields:
