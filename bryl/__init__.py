@@ -441,23 +441,18 @@ class RecordMeta(type):
         # cache fields
         is_field = lambda x: (
             inspect.isdatadescriptor(x) and isinstance(x, Field)
-            )
+        )
         cls.fields = sorted([
-            field for _, field in inspect.getmembers(cls, is_field)
+                field if field.name in cls.__dict__ else copy.copy(field)
+                for _, field in inspect.getmembers(cls, is_field)
             ],
             key=lambda x: x._order,
-            )
+        )
 
-        # backfill field offsets
+        # cache field offsets
         offset = 0
         for field in cls.fields:
-            if field.offset is None:
-                field.offset = offset
-            elif field.offset != offset:
-                raise Exception(
-                    '{}.{} offset cannot be changed from {} to {}'
-                    .format(cls.__name__, field.name, field.offset, offset)
-                    )
+            field.offset = offset
             offset += field.length
 
         # cache length
