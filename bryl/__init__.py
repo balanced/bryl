@@ -33,6 +33,8 @@ class Field(object):
     copy = [
         'length',
         'required',
+        'pad',
+        'align',
         ('order', '_order'),
         'name',
         ('constant', '_constant'),
@@ -43,13 +45,15 @@ class Field(object):
     def  __init__(self,
                   length,
                   required=True,
+                  pad=None,
+                  align=None,
                   order=None,
                   name=None,
                   constant=None,
                   enum=None,
                   default=None,
                   offset=None,
-                  ):
+        ):
         self._order = self._order.next() if order is None else order
         self.name = name
         self.length = length
@@ -58,6 +62,8 @@ class Field(object):
             self.default = None
         else:
             self.default = self.default if default is None else default
+        self.pad = self.pad if pad is None else pad
+        self.align = self.align if align is None else align
         self._constant = constant
         if isinstance(enum, list):
             if not enum:
@@ -156,9 +162,9 @@ class Field(object):
 
     def __repr__(self, *args, **kwargs):
         attrs = ', '.join([
-            '{}={}'.format(k, getattr(self, k))
-            for k in ['name', 'length', 'required', 'default']
-            ])
+            '{}={}'.format(k, repr(getattr(self, k)))
+            for k in ['name', 'length', 'required', 'default', 'pad', 'align']
+        ])
         return '{}({})'.format(type(self).__name__, attrs)
 
     @property
