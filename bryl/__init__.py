@@ -2,8 +2,10 @@
 """
 __all__ = [
     'Field',
-    'DateField',
-    'TimeField',
+    'Numeric',
+    'Alphanumeric',
+    'Date',
+    'Time',
     'Record',
 ]
 
@@ -304,7 +306,7 @@ class Alphanumeric(Field):
                     )
 
 
-class DatetimeField(Field):
+class Datetime(Field):
 
     default = None
 
@@ -338,7 +340,7 @@ class DatetimeField(Field):
 
     def  __init__(self, format, *args, **kwargs):
         self.format = format
-        super(DatetimeField, self).__init__(len(self.format), *args, **kwargs)
+        super(Datetime, self).__init__(len(self.format), *args, **kwargs)
         self._str_format, self._tz = self._to_str_format(format)
 
     @classmethod
@@ -403,7 +405,7 @@ class DatetimeField(Field):
         return raw
 
 
-class DateField(DatetimeField):
+class Date(Datetime):
 
     format_re = re.compile(
         'Y{4}|Y{2}|D{3}|D{2}|M{2}|J{3}'  # day
@@ -420,7 +422,7 @@ class DateField(DatetimeField):
         return value.strftime(self._str_format)
 
 
-class TimeField(DatetimeField):
+class Time(Datetime):
 
     format_re = re.compile(
         'h{2}|H{2}|m{2}|s{2}|X{2}|Z{3}|p{2}'  # time
@@ -431,7 +433,7 @@ class TimeField(DatetimeField):
             return self.error(value, 'must be a time')
 
     def load(self, raw):
-        return super(TimeField, self).load(raw).time()
+        return super(Time, self).load(raw).time()
 
 
 class RecordMeta(type):
