@@ -85,9 +85,9 @@ class Field(object):
     def reserved(self):
         if type(self).default is None:
             raise TypeError(
-                '{} does not have a default and so cannot be reserved'
+                '{0} does not have a default and so cannot be reserved'
                 .format(self)
-                )
+            )
         return self.constant(type(self).default)
 
     def constant(self, value):
@@ -95,7 +95,7 @@ class Field(object):
         error = self.validate(value)
         if error:
             raise self.error_type(
-                'Invalid {}.constant({}) - {}'.format(self, value, error)
+                'Invalid {0}.constant({1}) - {2}'.format(self, value, error)
                 )
         other._constant = value
         other.default = other._constant
@@ -108,8 +108,8 @@ class Field(object):
             return self._constant
         if self.name not in record:
             raise LookupError(
-                '{}.{} value is missing'.format(type(record).__name__, self.name)
-                )
+                '{0}.{1} value is missing'.format(type(record).__name__, self.name)
+            )
         value = record[self.name]
         if value is None:
             value = self.default
@@ -120,8 +120,8 @@ class Field(object):
         if self._constant is not None:
             if self._constant != value:
                 raise TypeError(
-                    '{} is constant and cannot be modified'.format(self)
-                    )
+                    '{0} is constant and cannot be modified'.format(self)
+                )
             return
         record[self.name] = new_value
 
@@ -148,7 +148,7 @@ class Field(object):
                     pass
             if error:
                 raise self.error_type(
-                    'Invalid {}.{} value {} for  - {}'
+                    'Invalid {0}.{1} value {2} for  - {3}'
                     .format(type(record).__name__, self.name, value, error)
                 )
             return value
@@ -164,10 +164,10 @@ class Field(object):
 
     def __repr__(self, *args, **kwargs):
         attrs = ', '.join([
-            '{}={}'.format(k, repr(getattr(self, k)))
+            '{0}={1}'.format(k, repr(getattr(self, k)))
             for k in ['name', 'length', 'required', 'default', 'pad', 'align']
         ])
-        return '{}({})'.format(type(self).__name__, attrs)
+        return '{0}({1})'.format(type(self).__name__, attrs)
 
     @property
     def value(self):
@@ -185,7 +185,7 @@ class Field(object):
         error = self.validate(value)
         if error:
             raise self.error_type(
-                'Invalid {} value {} for - {}'.format(self, value, error)
+                'Invalid {0} value {1} for - {2}'.format(self, value, error)
             )
         value = self.dump(value)
         if self.align == self.LEFT:
@@ -203,7 +203,7 @@ class Field(object):
 
     def unpack(self, raw):
         if len(raw) < self.length:
-            raise self.error_type('Length must be >= {}'.format(self.length))
+            raise self.error_type('Length must be >= {0}'.format(self.length))
         raw = raw[:self.length]
         if self.align == self.LEFT:
             value = raw.rstrip(self.pad)
@@ -213,17 +213,17 @@ class Field(object):
             value = raw.strip(self.pad)
         if self.pattern and not re.match(self.pattern, value):
             raise self.error_type(
-                '"{}" does not match pattern "{}"'.format(value, self.pattern)
+                '"{0}" does not match pattern "{1}"'.format(value, self.pattern)
                 )
         try:
             value = self.load(value)
         except self.error_type, ex:
             value = ex
         if isinstance(value, Exception):
-            raise self.error_type('{} - {}'.format(self, self.error(raw, value)))
+            raise self.error_type('{0} - {1}'.format(self, self.error(raw, value)))
         error = self.validate(value)
         if error:
-            raise self.error_type('{} {} - {}'.format(self, value, error))
+            raise self.error_type('{0} {1} - {2}'.format(self, value, error))
         return value
 
     def load(self, value):
@@ -231,7 +231,7 @@ class Field(object):
 
     def probe(self, io):
         if self.offset is None:
-            raise TypeError('{}.offset is None'.format(self))
+            raise TypeError('{0}.offset is None'.format(self))
         restore = io.tell()
         try:
             io.seek(self.offset, os.SEEK_CUR)
@@ -274,14 +274,14 @@ class Numeric(Field):
         if not isinstance(value, (int, long)):
             return self.error(value, 'must be a whole number')
         if self.enum and value not in self.enum:
-            return self.error(value, 'must be one of {}, got "{}"'.format(
+            return self.error(value, 'must be one of {0}, got "{1}"'.format(
                 self.enum, value))
         if len(str(value)) > self.length:
-            return self.error(value, 'must have length <= {}'.format(self.length))
+            return self.error(value, 'must have length <= {0}'.format(self.length))
         if self.min_value is not None and self.min_value > value:
-            return self.error(value, 'must be >= {}'.format(self.min_value))
+            return self.error(value, 'must be >= {0}'.format(self.min_value))
         if self.max_value is not None and self.max_value < value:
-            return self.error(value, 'must be <= {}'.format(self.min_value))
+            return self.error(value, 'must be <= {0}'.format(self.min_value))
 
 
 class Alphanumeric(Field):
@@ -295,15 +295,16 @@ class Alphanumeric(Field):
         if not isinstance(value, basestring):
             return self.error(value, 'must be a string')
         if self.enum and value not in self.enum:
-            return self.error(value, 'must be one of {}, got "{}"'.format(
-                self.enum, value))
+            return self.error(
+                value, 'must be one of {0}, got "{1}"'.format(self.enum, value)
+            )
         if len(value) > self.length:
-            return self.error(value, 'must have length <= {}'.format(self.length))
+            return self.error(value, 'must have length <= {0}'.format(self.length))
         for i, c in enumerate(value):
             if c not in self.alphabet:
                 return self.error(
-                    value, 'has invalid character "{}" @ {}'.format(c, i)
-                    )
+                    value, 'has invalid character "{0}" @ {1}'.format(c, i)
+                )
 
 
 class Datetime(Field):
@@ -467,10 +468,10 @@ class RecordMeta(type):
         cls.length = sum(field.length for field in cls.fields)
 
         # cache default field values
-        cls._defaults = {
-            field.name: field.default
+        cls._defaults = dict([
+            (field.name, field.default)
             for field in cls.fields if field.default is not None
-            }
+        ])
 
         return cls
 
@@ -488,9 +489,8 @@ class Record(dict):
             field = getattr(type(self), k, None)
             if not field or not isinstance(field, self.field_type):
                 raise ValueError(
-                    '{} does not have field {}'
-                    .format(type(self).__name__, k)
-                    )
+                    '{0} does not have field {1}'.format(type(self).__name__, k)
+                )
             field.fill(self, v)
 
     @classmethod
