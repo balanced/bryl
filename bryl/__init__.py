@@ -45,6 +45,7 @@ class Field(object):
         ('constant', '_constant'),
         ('enum', '_enum'),
         'offset',
+        'default',
     ]
 
     def  __init__(self,
@@ -92,7 +93,8 @@ class Field(object):
                 .format(self)
             )
         other = copy.copy(self)
-        other.default = type(self).default
+        other._constant = type(self).default
+        other.default = other._constant
         return other
 
     def constant(self, value):
@@ -112,6 +114,8 @@ class Field(object):
         if self._constant is not None:
             return self._constant
         if self.name not in record:
+            if self.default is not None:
+                return self.default
             raise LookupError(
                 '{0}.{1} value is missing'.format(type(record).__name__, self.name)
             )
@@ -423,7 +427,7 @@ class Datetime(Field):
             tz = self.time_zones[tz]
         value = datetime.datetime.strptime(raw, self._str_format)
         if tz:
-            value = value.replace(tzinfo=tz)
+            value = tz.localize(value)
         return value
 
     def dump(self, value):
