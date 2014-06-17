@@ -7,10 +7,12 @@ __all__ = [
     'Date',
     'Time',
     'Record',
+    'Reader',
 ]
 
 __version__ = '0.1.0'
 
+import collections
 import copy
 import datetime
 import inspect
@@ -18,6 +20,7 @@ import itertools
 import os
 import re
 import string
+import StringIO
 
 
 class Field(object):
@@ -88,7 +91,9 @@ class Field(object):
                 '{0} does not have a default and so cannot be reserved'
                 .format(self)
             )
-        return self.constant(type(self).default)
+        other = copy.copy(self)
+        other.default = type(self).default
+        return other
 
     def constant(self, value):
         other = copy.copy(self)
@@ -282,6 +287,8 @@ class Numeric(Field):
             return self.error(value, 'must be >= {0}'.format(self.min_value))
         if self.max_value is not None and self.max_value < value:
             return self.error(value, 'must be <= {0}'.format(self.min_value))
+        if self._constant is not None and value != self._constant:
+            return self.error(value, 'must be constant {0}'.format(repr(self._constant)))
 
 
 class Alphanumeric(Field):
@@ -290,6 +297,24 @@ class Alphanumeric(Field):
     align = Field.LEFT
     alphabet = string.printable
     default = ''
+
+    def normalize(self, value):
+        if value is None:
+            return self.default
+        if not isinstance(value, basestring):
+            raise ValueError('Must be as string')
+        if self.enum and value not in self.enum:
+            if value.upper() in self.enum:
+                return value.upper()
+            if value.lower() in self.enum:
+                return value.lower()
+            raise ValueError(
+                'Must be one of {0}, got "{1}"'.format(self.enum, value)
+            )
+        value = ''.join(c for c in value if c in self.alphabet)
+        if len(value) > self.length:
+            value = value[:self.length]
+        return value
 
     def validate(self, value):
         if not isinstance(value, basestring):
@@ -305,6 +330,8 @@ class Alphanumeric(Field):
                 return self.error(
                     value, 'has invalid character "{0}" @ {1}'.format(c, i)
                 )
+        if self._constant is not None and value != self._constant:
+            return self.error(value, 'must be constant {0}'.format(repr(self._constant)))
 
 
 class Datetime(Field):
@@ -495,6 +522,8 @@ class Record(dict):
 
     @classmethod
     def probe(cls, io):
+        if isinstance(io, basestring):
+            io = StringIO.StringIO(io)
         restore = io.tell()
         try:
             try:
@@ -515,3 +544,100 @@ class Record(dict):
 
     def dump(self):
         return ''.join([f.pack(f.__get__(self)) for f in self.fields])
+
+
+
+class Malformed(ValueError):
+
+    def __init__(self, file_name, line_no, reason):
+        super(Malformed, self).__init__(
+            "{0} @ {1} - {2}".format(file_name, line_no, reason)
+        )
+        self.file_name = file_name
+        self.line_no = line_no
+        self.reason = reason
+
+
+class Reader(collections.Iterator):
+
+    record_type = Record
+
+    def __init__(self, fo, include_terminal=False, expected_terminal=None):
+        self.fo = fo
+        self.include_terminal = include_terminal
+        self.expected_terminal = expected_terminal
+        self.name = getattr(self.fo, 'name', '<memory>')
+        self.line_no = 1
+        self.retry = None
+
+    # collections.Iterator
+
+    def __iter__(self):
+        return self
+
+    def next(self):
+        line, line_no = self.next_line()
+        if line is None:
+            raise StopIteration()
+        try:
+            record = self.as_record(line, line_no)
+        except self.record_type.field_type.error_type, ex:
+            raise self.malformed(line_no, str(ex))
+        if not self.include_terminal:
+            return record
+        record_terminal = line[type(record).length:]
+        if (self.expected_terminal is not None and
+            record_terminal != self.expected_terminal):
+            self.malformed(
+                line_no, 'unexpected EOL "{0}"'.format(record_terminal)
+            )
+        return record, record_terminal
+
+    # internals
+
+    def next_line(self):
+        if self.retry:
+            line, line_no = self.retry
+            self.retry = None
+        else:
+            line = self.fo.readline()
+            if not line:
+                return None, self.line_no
+            line_no = self.line_no
+            self.line_no += 1
+        return line, line_no
+
+    def next_record(self, expected_type=None, default='raise'):
+        line, line_no = self.next_line()
+        if line is None:
+            if default == 'raise':
+                self.malformed(line_no, 'unexpected EOF')
+            return default
+        try:
+            record = self.as_record(line, line_no)
+        except Malformed, ex:
+            self.retry = line, line_no
+            raise
+        except self.record_type.field_type.error_type, ex:
+            self.retry = line, line_no
+            self.malformed(line_no, str(ex))
+        if not isinstance(record, (expected_type or self.record_type)):
+            self.retry = line, line_no
+            if default == 'raise':
+                self.malformed(line_no, 'unexpected record type {0}'.format(type(record)))
+            return
+        return record
+
+    def as_record(self, line, line_no):
+        record_type = self.as_record_type(line, line_no)
+        if inspect.isclass(record_type):
+            record = record_type.load(line)
+        else:
+            record = record_type
+        return record
+
+    def as_record_type(self, line, line_no):
+        raise NotImplementedError
+
+    def malformed(self, line_no, reson):
+        raise Malformed(self.name, line_no, reson)
