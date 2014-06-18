@@ -482,12 +482,17 @@ class RecordMeta(type):
         is_field = lambda x: (
             inspect.isdatadescriptor(x) and isinstance(x, Field)
         )
-        cls.fields = sorted([
-                field if field.name in cls.__dict__ else copy.copy(field)
-                for _, field in inspect.getmembers(cls, is_field)
-            ],
-            key=lambda x: x._order,
-        )
+        cls.fields = [
+            field if field.name in cls.__dict__ else copy.copy(field)
+            for _, field in inspect.getmembers(cls, is_field)
+        ]
+        for field in cls.fields:
+            for base in bases:
+                if (not hasattr(base, field.name) or
+                    not isinstance(getattr(base, field.name), Field)):
+                    continue
+                field._order = getattr(base, field.name)._order
+        cls.fields = sorted(cls.fields, key=lambda x: x._order)
 
         # cache field offsets
         offset = 0
@@ -643,5 +648,5 @@ class Reader(collections.Iterator):
     def as_record_type(self, line, line_no):
         raise NotImplementedError
 
-    def malformed(self, line_no, reson):
-        raise Malformed(self.name, line_no, reson)
+    def malformed(self, line_no, reason):
+        raise Malformed(self.name, line_no, reason)
