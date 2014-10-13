@@ -1,6 +1,7 @@
 """
 """
 __all__ = [
+    'ctx',
     'Field',
     'Numeric',
     'Alphanumeric',
@@ -21,6 +22,62 @@ import os
 import re
 import string
 import StringIO
+import threading
+
+
+class Context(threading.local):
+
+    class _Frame(dict):
+
+        def __getattr__(self, key):
+            if key in self:
+                return self[key]
+            raise AttributeError(
+                '"{0}" object has no attribute "{1}"'
+                .format(type(self).__name__, key)
+            )
+
+    class _Close(object):
+
+        def __init__(self, func):
+            self.func = func
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, type, value, traceback):
+            self.func()
+
+    def __init__(self, **defaults):
+        self.stack = [self._Frame(
+            alpha_filter=False,
+            alpha_truncate=False,
+            alpha_upper=False,
+            **defaults
+        )]
+
+    def push(self, **kwargs):
+        self.stack.append(self._Frame(**kwargs))
+        return self._Close(self.pop)
+
+    def pop(self):
+        self.stack.pop()
+
+    def __call__(self, **kwargs):
+        self.stack[-1].update(kwargs)
+        return self
+
+    def __getattr__(self, key):
+        for frame in reversed(self.stack):
+            if key in frame:
+                return frame[key]
+        raise AttributeError(
+            '"{0}" object has no attribute "{1}"'
+            .format(type(self).__name__, key)
+        )
+
+
+ctx = Context(sanitize=True)
 
 
 class Field(object):
@@ -29,12 +86,21 @@ class Field(object):
     RIGHT = 'right'
 
     _order = itertools.count()
+
     pad = ''
+
     align = None
+
     offset = None
+
     default = None
+
     pattern = None
+
+    ctx = ctx
+
     error_type = ValueError
+
     copy = [
         'length',
         'required',
@@ -117,7 +183,8 @@ class Field(object):
             if self.default is not None:
                 return self.default
             raise LookupError(
-                '{0}.{1} value is missing'.format(type(record).__name__, self.name)
+                '{0}.{1} value is missing'
+                .format(type(record).__name__, self.name)
             )
         value = record[self.name]
         if value is None:
@@ -125,7 +192,7 @@ class Field(object):
         return value
 
     def __set__(self, record, value):
-        new_value = self.handle_validation(record, value)
+        new_value = self.map(record, value)
         if self._constant is not None:
             if self._constant != value:
                 raise TypeError(
@@ -133,34 +200,6 @@ class Field(object):
                 )
             return
         record[self.name] = new_value
-
-    def fill(self, record, value):
-        new_value = self.handle_validation(record, value)
-        if self._constant is not None:
-            return
-        record[self.name] = new_value
-
-    def handle_validation(self, record, value):
-        if value is not None:
-            error = self.validate(value)
-            if error:
-                try:
-                    value = self.load(value)
-                    error = self.validate(value)
-                except (self.error_type, ValueError, TypeError):
-                    pass
-            if error:
-                try:
-                    value = self.load(str(value))
-                    error = self.validate(value)
-                except (self.error_type, ValueError, TypeError):
-                    pass
-            if error:
-                raise self.error_type(
-                    'Invalid {0}.{1} value {2} for  - {3}'
-                    .format(type(record).__name__, self.name, value, error)
-                )
-            return value
 
     def __copy__(self):
         kwargs = {}
@@ -183,6 +222,38 @@ class Field(object):
         if self._constant is None:
             raise TypeError('Non-constant fields do not have a value')
         return self._constant
+
+    def fill(self, record, value):
+        new_value = self.map(record, value)
+        if self._constant is not None:
+            return
+        record[self.name] = new_value
+
+    def map(self, record, value):
+        if value is not None:
+            value = self.sanitize(value)
+            error = self.validate(value)
+            if error:
+                try:
+                    value = self.load(value)
+                    error = self.validate(value)
+                except (self.error_type, AttributeError, ValueError, TypeError):
+                    pass
+            if error:
+                try:
+                    value = self.load(str(value))
+                    error = self.validate(value)
+                except (self.error_type, AttributeError, ValueError, TypeError):
+                    pass
+            if error:
+                raise self.error_type(
+                    u'Invalid {0}.{1} value {2} for - {3}'
+                    .format(type(record).__name__, self.name, value, error)
+                )
+            return value
+
+    def sanitize(self, value):
+        return value
 
     def validate(self, value):
         pass
@@ -302,23 +373,16 @@ class Alphanumeric(Field):
     alphabet = string.printable
     default = ''
 
-    def normalize(self, value):
-        if value is None:
-            return self.default
-        if not isinstance(value, basestring):
-            raise ValueError('Must be as string')
-        if self.enum and value not in self.enum:
-            if value.upper() in self.enum:
-                return value.upper()
-            if value.lower() in self.enum:
-                return value.lower()
-            raise ValueError(
-                'Must be one of {0}, got "{1}"'.format(self.enum, value)
-            )
-        value = ''.join(c for c in value if c in self.alphabet)
-        if len(value) > self.length:
-            value = value[:self.length]
-        return value
+    def sanitize(self, value):
+        v = value
+        if self.ctx.alpha_filter:
+            v = ''.join(c for c in value if c in self.alphabet)
+        if self.ctx.alpha_truncate:
+            if len(v) > self.length:
+                v = v[:self.length]
+        if self.ctx.alpha_upper:
+            v = v.upper()
+        return v
 
     def validate(self, value):
         if not isinstance(value, basestring):
@@ -328,14 +392,18 @@ class Alphanumeric(Field):
                 value, 'must be one of {0}, got "{1}"'.format(self.enum, value)
             )
         if len(value) > self.length:
-            return self.error(value, 'must have length <= {0}'.format(self.length))
+            return self.error(
+                value, 'must have length <= {0}'.format(self.length)
+            )
         for i, c in enumerate(value):
             if c not in self.alphabet:
                 return self.error(
-                    value, 'has invalid character "{0}" @ {1}'.format(c, i)
+                    value, u'has invalid character "{0}" @ {1}'.format(c, i)
                 )
         if self._constant is not None and value != self._constant:
-            return self.error(value, 'must be constant {0}'.format(repr(self._constant)))
+            return self.error(
+                value, 'must be constant {0}'.format(repr(self._constant))
+            )
 
 
 class Datetime(Field):
@@ -537,7 +605,7 @@ class Record(dict):
         try:
             try:
                 return cls.load(io.read(cls.length))
-            except Field.error_type:
+            except (Field.error_type, TypeError):
                 return None
         finally:
             io.seek(restore, os.SEEK_SET)
