@@ -231,7 +231,10 @@ class Field(object):
 
     def map(self, record, value):
         if value is not None:
-            value = self.sanitize(value)
+            try:
+                value = self.sanitize(value)
+            except (self.error_type, AttributeError, ValueError, TypeError):
+                pass
             error = self.validate(value)
             if error:
                 try:
@@ -247,7 +250,7 @@ class Field(object):
                     pass
             if error:
                 raise self.error_type(
-                    u'Invalid {0}.{1} value {2} for - {3}'
+                    'Invalid {0}.{1} value {2} for - {3}'
                     .format(type(record).__name__, self.name, value, error)
                 )
             return value
@@ -264,8 +267,10 @@ class Field(object):
     def pack(self, value):
         error = self.validate(value)
         if error:
+            if isinstance(value, str):
+                value = value.decode('utf-8')
             raise self.error_type(
-                'Invalid {0} value {1} for - {2}'.format(self, value, error)
+                u'Invalid {0} value {1} for - {2}'.format(self, value, error)
             )
         value = self.dump(value)
         if self.align == self.LEFT:
@@ -397,8 +402,10 @@ class Alphanumeric(Field):
             )
         for i, c in enumerate(value):
             if c not in self.alphabet:
+                if c not in string.printable:
+                    c = hex(ord(c))
                 return self.error(
-                    value, u'has invalid character "{0}" @ {1}'.format(c, i)
+                    value, 'has invalid character "{0}" @ {1}'.format(c, i)
                 )
         if self._constant is not None and value != self._constant:
             return self.error(
