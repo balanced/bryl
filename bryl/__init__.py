@@ -45,6 +45,7 @@ Some applications:
 
 """
 __all__ = [
+    'ctx',
     'Field',
     'Numeric',
     'Alphanumeric',
@@ -66,6 +67,62 @@ import os
 import re
 import string
 import StringIO
+import threading
+
+
+class Context(threading.local):
+
+    class _Frame(dict):
+
+        def __getattr__(self, key):
+            if key in self:
+                return self[key]
+            raise AttributeError(
+                '"{0}" object has no attribute "{1}"'
+                .format(type(self).__name__, key)
+            )
+
+    class _Close(object):
+
+        def __init__(self, func):
+            self.func = func
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, type, value, traceback):
+            self.func()
+
+    def __init__(self, **defaults):
+        self.stack = [self._Frame(
+            alpha_filter=False,
+            alpha_truncate=False,
+            alpha_upper=False,
+            **defaults
+        )]
+
+    def push(self, **kwargs):
+        self.stack.append(self._Frame(**kwargs))
+        return self._Close(self.pop)
+
+    def pop(self):
+        self.stack.pop()
+
+    def __call__(self, **kwargs):
+        self.stack[-1].update(kwargs)
+        return self
+
+    def __getattr__(self, key):
+        for frame in reversed(self.stack):
+            if key in frame:
+                return frame[key]
+        raise AttributeError(
+            '"{0}" object has no attribute "{1}"'
+            .format(type(self).__name__, key)
+        )
+
+
+ctx = Context(sanitize=True)
 
 
 class Field(object):
@@ -74,12 +131,21 @@ class Field(object):
     RIGHT = 'right'
 
     _order = itertools.count()
+
     pad = ''
+
     align = None
+
     offset = None
+
     default = None
+
     pattern = None
+
+    ctx = ctx
+
     error_type = ValueError
+
     copy = [
         'length',
         'required',
@@ -162,7 +228,8 @@ class Field(object):
             if self.default is not None:
                 return self.default
             raise LookupError(
-                '{0}.{1} value is missing'.format(type(record).__name__, self.name)
+                '{0}.{1} value is missing'
+                .format(type(record).__name__, self.name)
             )
         value = record[self.name]
         if value is None:
@@ -170,7 +237,7 @@ class Field(object):
         return value
 
     def __set__(self, record, value):
-        new_value = self.handle_validation(record, value)
+        new_value = self.map(record, value)
         if self._constant is not None:
             if self._constant != value:
                 raise TypeError(
@@ -178,34 +245,6 @@ class Field(object):
                 )
             return
         record[self.name] = new_value
-
-    def fill(self, record, value):
-        new_value = self.handle_validation(record, value)
-        if self._constant is not None:
-            return
-        record[self.name] = new_value
-
-    def handle_validation(self, record, value):
-        if value is not None:
-            error = self.validate(value)
-            if error:
-                try:
-                    value = self.load(value)
-                    error = self.validate(value)
-                except (self.error_type, ValueError, TypeError):
-                    pass
-            if error:
-                try:
-                    value = self.load(str(value))
-                    error = self.validate(value)
-                except (self.error_type, ValueError, TypeError):
-                    pass
-            if error:
-                raise self.error_type(
-                    'Invalid {0}.{1} value {2} for  - {3}'
-                    .format(type(record).__name__, self.name, value, error)
-                )
-            return value
 
     def __copy__(self):
         kwargs = {}
@@ -229,6 +268,41 @@ class Field(object):
             raise TypeError('Non-constant fields do not have a value')
         return self._constant
 
+    def fill(self, record, value):
+        new_value = self.map(record, value)
+        if self._constant is not None:
+            return
+        record[self.name] = new_value
+
+    def map(self, record, value):
+        if value is not None:
+            try:
+                value = self.sanitize(value)
+            except (self.error_type, AttributeError, ValueError, TypeError):
+                pass
+            error = self.validate(value)
+            if error:
+                try:
+                    value = self.load(value)
+                    error = self.validate(value)
+                except (self.error_type, AttributeError, ValueError, TypeError):
+                    pass
+            if error:
+                try:
+                    value = self.load(str(value))
+                    error = self.validate(value)
+                except (self.error_type, AttributeError, ValueError, TypeError):
+                    pass
+            if error:
+                raise self.error_type(
+                    'Invalid {0}.{1} value {2} for - {3}'
+                    .format(type(record).__name__, self.name, value, error)
+                )
+            return value
+
+    def sanitize(self, value):
+        return value
+
     def validate(self, value):
         pass
 
@@ -238,8 +312,10 @@ class Field(object):
     def pack(self, value):
         error = self.validate(value)
         if error:
+            if isinstance(value, str):
+                value = value.decode('utf-8')
             raise self.error_type(
-                'Invalid {0} value {1} for - {2}'.format(self, value, error)
+                u'Invalid {0} value {1} for - {2}'.format(self, value, error)
             )
         value = self.dump(value)
         if self.align == self.LEFT:
@@ -347,23 +423,16 @@ class Alphanumeric(Field):
     alphabet = string.printable
     default = ''
 
-    def normalize(self, value):
-        if value is None:
-            return self.default
-        if not isinstance(value, basestring):
-            raise ValueError('Must be as string')
-        if self.enum and value not in self.enum:
-            if value.upper() in self.enum:
-                return value.upper()
-            if value.lower() in self.enum:
-                return value.lower()
-            raise ValueError(
-                'Must be one of {0}, got "{1}"'.format(self.enum, value)
-            )
-        value = ''.join(c for c in value if c in self.alphabet)
-        if len(value) > self.length:
-            value = value[:self.length]
-        return value
+    def sanitize(self, value):
+        v = value
+        if self.ctx.alpha_filter:
+            v = ''.join(c for c in value if c in self.alphabet)
+        if self.ctx.alpha_truncate:
+            if len(v) > self.length:
+                v = v[:self.length]
+        if self.ctx.alpha_upper:
+            v = v.upper()
+        return v
 
     def validate(self, value):
         if not isinstance(value, basestring):
@@ -373,9 +442,13 @@ class Alphanumeric(Field):
                 value, 'must be one of {0}, got "{1}"'.format(self.enum, value)
             )
         if len(value) > self.length:
-            return self.error(value, 'must have length <= {0}'.format(self.length))
+            return self.error(
+                value, 'must have length <= {0}'.format(self.length)
+            )
         for i, c in enumerate(value):
             if c not in self.alphabet:
+                if c not in string.printable:
+                    c = hex(ord(c))
                 return self.error(
                     value, 'has invalid character "{0}" @ {1}'.format(c, i)
                 )
@@ -580,7 +653,7 @@ class Record(dict):
         try:
             try:
                 return cls.load(io.read(cls.length))
-            except Field.error_type:
+            except (Field.error_type, TypeError):
                 return None
         finally:
             io.seek(restore, os.SEEK_SET)
@@ -598,34 +671,114 @@ class Record(dict):
         return ''.join([f.pack(f.__get__(self)) for f in self.fields])
 
 
-
 class Malformed(ValueError):
 
-    def __init__(self, file_name, line_no, reason):
+    def __init__(self, file_name, offset, reason):
         super(Malformed, self).__init__(
-            "{0} @ {1} - {2}".format(file_name, line_no, reason)
+            "{0} @ {1} - {2}".format(file_name, offset, reason)
         )
         self.file_name = file_name
-        self.line_no = line_no
+        self.offset = offset
         self.reason = reason
 
 
 class Reader(collections.Iterator):
+    """
+    Record iterator.
+    """
 
-    record_type = Record
+    #: Type of record handled by this reader.
+    record_type = None
 
-    def __init__(self, fo, include_terminal=False, expected_terminal=None):
+    #: Callable used to probe `record_type` for a persisted record.
+    as_record_type = None
+
+    def __init__(self, fo, as_record_type=None):
+        """
+        :param fo: File-like object from which to read `record_type` records.
+        :param as_record_type:
+            Callable used to determine `record_type` for a persisted record:
+
+            .. code::
+
+            def as_record_type(reader, data, offset):
+                ...
+
+        """
         self.fo = fo
-        self.include_terminal = include_terminal
-        self.expected_terminal = expected_terminal
         self.name = getattr(self.fo, 'name', '<memory>')
-        self.line_no = 1
+        self.as_record_type = as_record_type or self.as_record_type
+        if self.as_record_type is None:
+            raise TypeError('Must define as_record_type=')
         self.retry = None
+
+    def next_record(self, expected_type=None, default='raise'):
+        raise NotImplementedError
+
+    def malformed(self, offset, reason):
+        raise Malformed(self.name, offset, reason)
 
     # collections.Iterator
 
     def __iter__(self):
         return self
+
+
+class LineReader(Reader):
+    """
+    Terminal delimited record iterator:
+
+    .. code:: python
+
+        class MyLineReader(bryl.BlockReader)
+
+            record_type = MyRecord
+
+            @staticmethod
+            def as_record_type(reader, data, offset):
+                ...
+
+        my_records = list(MyLineReader(open('/my/records', 'rU')))
+
+    """
+
+    def __init__(self,
+                 fo,
+                 as_record_type=None,
+                 include_terminal=False,
+                 expected_terminal=None,
+        ):
+        super(LineReader, self).__init__(fo, as_record_type)
+        self.line_no = 1
+        self.include_terminal = include_terminal
+        self.expected_terminal = expected_terminal
+
+    # Reader
+
+    def next_record(self, expected_type=None, default='raise'):
+        line, line_no = self.next_line()
+        if line is None:
+            if default == 'raise':
+                self.malformed(line_no, 'unexpected EOF')
+            return default
+        try:
+            record = self.as_record(line, line_no)
+        except Malformed, ex:
+            self.retry = line, line_no
+            raise
+        except self.record_type.field_type.error_type, ex:
+            self.retry = line, line_no
+            self.malformed(line_no, str(ex))
+        if not isinstance(record, (expected_type or self.record_type)):
+            self.retry = line, line_no
+            if default == 'raise':
+                self.malformed(
+                    line_no, 'unexpected record type {0}'.format(type(record))
+                )
+            return
+        return record
+
+    # collections.Iterator
 
     def next(self):
         line, line_no = self.next_line()
@@ -659,37 +812,99 @@ class Reader(collections.Iterator):
             self.line_no += 1
         return line, line_no
 
-    def next_record(self, expected_type=None, default='raise'):
-        line, line_no = self.next_line()
-        if line is None:
-            if default == 'raise':
-                self.malformed(line_no, 'unexpected EOF')
-            return default
-        try:
-            record = self.as_record(line, line_no)
-        except Malformed, ex:
-            self.retry = line, line_no
-            raise
-        except self.record_type.field_type.error_type, ex:
-            self.retry = line, line_no
-            self.malformed(line_no, str(ex))
-        if not isinstance(record, (expected_type or self.record_type)):
-            self.retry = line, line_no
-            if default == 'raise':
-                self.malformed(line_no, 'unexpected record type {0}'.format(type(record)))
-            return
-        return record
-
     def as_record(self, line, line_no):
-        record_type = self.as_record_type(line, line_no)
+        record_type = self.as_record_type(self, line, line_no)
         if inspect.isclass(record_type):
             record = record_type.load(line)
         else:
             record = record_type
         return record
 
-    def as_record_type(self, line, line_no):
-        raise NotImplementedError
 
-    def malformed(self, line_no, reason):
-        raise Malformed(self.name, line_no, reason)
+class BlockReader(Reader):
+    """
+    Fixed-size record iterator:
+
+    .. code:: python
+
+        class MyBlockReader(bryl.BlockReader)
+
+            record_type = MyRecord
+
+            record_size = 256
+
+            @staticmethod
+            def as_record_type(reader, data, offset):
+                ...
+
+        my_records = list(MyBlockReader(open('/my/records', 'rb')))
+
+    """
+
+    #: Fixed size, in bytes, of all records.
+    record_size = None
+
+    def __init__(self, fo, as_record_type=None, record_size=None):
+        super(BlockReader, self).__init__(fo, as_record_type)
+        self.record_size = record_size or self.record_size
+        self.block_offset = fo.tell()
+
+    # Reader
+
+    def next_record(self, expected_type=None, default='raise'):
+        block, block_offset = self.next_block()
+        if block is None:
+            if default == 'raise':
+                self.malformed(block_offset, 'unexpected EOF')
+            return default
+        try:
+            record = self.as_record(block, block_offset)
+        except Malformed, ex:
+            self.retry = block, block_offset
+            raise
+        except self.record_type.field_type.error_type, ex:
+            self.retry = block, block_offset
+            self.malformed(block_offset, str(ex))
+        if not isinstance(record, (expected_type or self.record_type)):
+            self.retry = block, block_offset
+            if default == 'raise':
+                self.malformed(
+                    block_offset,
+                    'unexpected record type {0}'.format(type(record)),
+                )
+            return
+        return record
+
+    # collections.Iterator
+
+    def next(self):
+        block, block_offset = self.next_block()
+        if block is None:
+            raise StopIteration()
+        try:
+            record = self.as_record(block, block_offset)
+        except self.record_type.field_type.error_type, ex:
+            raise self.malformed(block_offset, str(ex))
+        return record
+
+    # internals
+
+    def next_block(self):
+        if self.retry:
+            block, block_offset = self.retry
+            self.retry = None
+        else:
+            block = self.fo.read(self.record_size)
+            if not block:
+                return None, self.block_offset
+            block_offset = self.block_offset
+            self.block_offset = self.fo.tell()
+        return block, block_offset
+
+    def as_record(self, block, block_offset):
+        record_type = self.as_record_type(self, block, block_offset)
+        if inspect.isclass(record_type):
+            record = record_type.load(block)
+        else:
+            record = record_type
+        return record
