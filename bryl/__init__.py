@@ -1,10 +1,55 @@
 """
+Declaratively defining then:
+
+- constructing and
+- serializing
+
+fixed sized records that are  composed of:
+
+- typed
+- fixed sized
+
+fields. This might look e.g. like:
+
+.. code:: python
+
+    import datetime
+
+    import bryl
+
+
+    class MyRecord(bryl.Record):
+
+        a = bryl.Alphanumeric(length=20)
+
+        b = bryl.Date('YYYYMMDD')
+
+        c = bryl.Numeric(length=10, align=bryl.Field.LEFT)
+
+        filler = bryl.Alphanumeric(length=10).reserved()
+
+    r = MyRecord(
+        a='hello',
+        b=datetime.datetime.utcnow().date(),
+        c=12312,
+    )
+    assert isinstance(r, dict)
+    print MyRecord.c.offset, MyRecord.c.length
+    print
+    assert MyRecord.load(r.dump()) == r
+
+Some applications:
+
+- `nacha <https://travis-ci.org/balanced/>`_
+- ...
+
 """
 __all__ = [
     'Field',
     'Numeric',
     'Alphanumeric',
     'Date',
+    'Datetime',
     'Time',
     'Record',
     'Reader',
@@ -334,8 +379,6 @@ class Alphanumeric(Field):
                 return self.error(
                     value, 'has invalid character "{0}" @ {1}'.format(c, i)
                 )
-        if self._constant is not None and value != self._constant:
-            return self.error(value, 'must be constant {0}'.format(repr(self._constant)))
 
 
 class Datetime(Field):
@@ -343,7 +386,7 @@ class Datetime(Field):
     default = None
 
     format_re = re.compile(
-        'Y{4}|Y{2}|D{3}|D{2}|M{2}|'           # day
+        'Y{4}|Y{2}|D{3}|D{2}|M{2}|'  # day
         'h{2}|H{2}|m{2}|s{2}|X{2}|Z{3}|p{2}'  # time
     )
 
@@ -357,11 +400,11 @@ class Datetime(Field):
         'JJJ': '%j',
 
         # time
-        'hh': '%H',   # 24 hr
-        'HH': '%I',   # 12 hr
+        'hh': '%H',  # 24 hr
+        'HH': '%I',  # 12 hr
         'mm': '%M',
         'ss': '%S',
-        'pp': '%p',   # http://stackoverflow.com/a/1759485
+        'pp': '%p',  # http://stackoverflow.com/a/1759485
         'ZZZ': '%Z',  # http://stackoverflow.com/a/14763274
         }
 
