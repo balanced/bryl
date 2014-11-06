@@ -48,7 +48,7 @@ fields. This might look e.g. like:
 
 Some applications:
 
-- `nacha <https://travis-ci.org/balanced/>`_
+- `nacha <https://github.com/balanced/nacha/>`_
 - ...
 
 ===
