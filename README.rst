@@ -48,7 +48,7 @@ fields. This might look e.g. like:
 
 Some applications:
 
-- `nacha <https://travis-ci.org/balanced/>`_
+- `nacha <https://github.com/balanced/nacha/>`_
 - ...
 
 ===
@@ -83,4 +83,3 @@ Now that all tests are passing:
 - Push it ``git push origin --tags``
 
 and `travis <https://travis-ci.org/balanced/bryl>`_ will take it from there.
-
